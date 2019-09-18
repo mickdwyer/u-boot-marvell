@@ -233,6 +233,8 @@ restore_page_0:
 void mv88e6xxx_display_switch_info(struct mv88e6xxx_dev *dev)
 {
 	unsigned int product_num;
+    int ret = 0;
+    char *comma = "";
 
 	if (dev->id < 0) {
 		printf("No Switch Device Found\n");
@@ -243,20 +245,40 @@ void mv88e6xxx_display_switch_info(struct mv88e6xxx_dev *dev)
 	if (product_num == PORT_SWITCH_ID_PROD_NUM_6390 ||
 	    product_num == PORT_SWITCH_ID_PROD_NUM_6290 ||
 	    product_num == PORT_SWITCH_ID_PROD_NUM_6190) {
-		printf("Switch    : SOHO\n");
-		printf("Series    : Peridot\n");
-		printf("Product # : %X\n", product_num);
-		printf("Revision  : %X\n", dev->id & 0xf);
+		printf("Switch      : SOHO\n");
+		printf("Series      : Peridot\n");
+		printf("Product #   : %X\n", product_num);
+		printf("Revision    : %X\n", dev->id & 0xf);
 		if (dev->cpu_port != -1)
-			printf("Cpu port  : %d\n", dev->cpu_port);
+			printf("Cpu port    : %d\n", dev->cpu_port);
+		printf("Addr Mode   : %s Addressing mode\n", dev->addr_mode == 0 ? "Single": "Multi");
 	} else if (product_num == PORT_SWITCH_ID_PROD_NUM_6141 ||
 		   product_num == PORT_SWITCH_ID_PROD_NUM_6341) {
-		printf("Switch    : SOHO\n");
-		printf("Series    : Topaz\n");
-		printf("Product # : %X\n", product_num);
-		printf("Revision  : %X\n", dev->id & 0xf);
+		printf("Switch      : SOHO\n");
+		printf("Series      : Topaz\n");
+		printf("Product #   : %X\n", product_num);
+		printf("Revision    : %X\n", dev->id & 0xf);
 		if (dev->cpu_port != -1)
-			printf("Cpu port  : %d\n", dev->cpu_port);
+			printf("Cpu port    : %d\n", dev->cpu_port);
+		printf("Addr Mode   : %s Addressing mode\n", dev->addr_mode == 0 ? "Single": "Multi");
+		printf("Port Status : ");
+		/* Report port control state */
+		for (int port = 0; port < sizeof(dev->port_mask) * 8; port++) {
+			if (!(dev->port_mask & BIT(port)))
+				continue;
+
+			/* get port control register */
+			ret = mv88e6xxx_read_register(dev,
+					 REG_PORT(port),
+					 PORT_CONTROL);
+			if (ret == PORT_CONTROL_STATE_DISABLED)
+				printf("%s port %d -> Disabled", comma, port);
+			else
+				printf("%s port %d -> %X", comma, port, ret);
+			comma = ",";
+		}
+		printf("\n");
+
 	} else {
 		printf("Unknown switch with Device ID: 0x%X\n", dev->id);
 	}
@@ -389,12 +411,7 @@ int mv88e6xxx_initialize(const void *blob)
 		mv88e6xxx_write_register(&soho_dev,
 					 REG_PORT(port),
 					 PORT_CONTROL,
-					 PORT_CONTROL_STATE_FORWARDING |
-					 PORT_CONTROL_FORWARD_UNKNOWN |
-					 PORT_CONTROL_FORWARD_UNKNOWN_MC |
-					 PORT_CONTROL_USE_TAG |
-					 PORT_CONTROL_USE_IP |
-					 PORT_CONTROL_TAG_IF_BOTH);
+					 PORT_CONTROL_STATE_DISABLED);
 		/* Set port based vlan table */
 		mv88e6xxx_write_register(&soho_dev,
 					 REG_PORT(port),
@@ -419,6 +436,54 @@ int mv88e6xxx_initialize(const void *blob)
 	return 0;
 }
 
+int mv88e6xxx_enable_switch(struct mv88e6xxx_dev *dev)
+{
+	int port;
+	int ret = 0;
+
+    /* Force port setup */
+    for (port = 0; port < sizeof(dev->port_mask) * 8; port++) {
+        if (!(dev->port_mask & BIT(port)))
+            continue;
+
+        /* Set port control register */
+        ret = mv88e6xxx_write_register(dev,
+                     REG_PORT(port),
+                     PORT_CONTROL,
+                     PORT_CONTROL_STATE_FORWARDING |
+                     PORT_CONTROL_FORWARD_UNKNOWN |
+                     PORT_CONTROL_FORWARD_UNKNOWN_MC |
+                     PORT_CONTROL_USE_TAG |
+                     PORT_CONTROL_USE_IP |
+                     PORT_CONTROL_TAG_IF_BOTH);
+		if (ret < 0 )
+			return ret;
+	}
+
+	return ret;
+}
+
+int mv88e6xxx_disable_switch(struct mv88e6xxx_dev *dev)
+{
+	int port;
+	int ret = 0;
+
+    /* Force port setup */
+    for (port = 0; port < sizeof(dev->port_mask) * 8; port++) {
+        if (!(dev->port_mask & BIT(port)))
+            continue;
+
+        /* Set port control register */
+        ret = mv88e6xxx_write_register(dev,
+                     REG_PORT(port),
+                     PORT_CONTROL,
+                     PORT_CONTROL_STATE_DISABLED);
+		if (ret < 0 )
+			break;
+	}
+	return ret;
+}
+
 static int sw_resolve_options(char *str)
 {
 	if (strcmp(str, "info") == 0)
@@ -433,6 +498,10 @@ static int sw_resolve_options(char *str)
 		return SW_PHY_WRITE;
 	else if (strcmp(str, "link") == 0)
 		return SW_LINK;
+	else if (strcmp(str, "enable") == 0)
+		return SW_ENABLE;
+	else if (strcmp(str, "disable") == 0)
+		return SW_DISABLE;
 	else
 		return SW_NA;
 }
@@ -534,6 +603,22 @@ static int do_sw(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 		ret = mv88e6xxx_get_link_status(dev, port);
 		break;
 
+	case SW_ENABLE:
+		ret = mv88e6xxx_enable_switch(dev);
+		if (ret < 0)
+			printf("Failed: Enable switch ports\n");
+		else
+			printf("Switch ports enabled\n");
+		break;
+
+	case SW_DISABLE:
+		ret = mv88e6xxx_disable_switch(dev);
+		if (ret < 0)
+			printf("Failed: Disable switch ports\n");
+		else
+			printf("Switch ports disabled\n");
+		break;
+
 	case SW_NA:
 		printf("\"switch %s\" - Wrong command. Try \"help switch\"\n",
 		       argv[1]);
@@ -554,4 +639,6 @@ U_BOOT_CMD(
 	"switch phy_read <port> <page> <reg> - read internal switch phy register <reg> at <page> of a switch <port>\n"
 	"switch phy_write <port> <page> <reg> <val>- write <val> to internal phy register at <page> of a <port>\n"
 	"switch link <port> - Display link state and speed of a <port>\n"
+    "switch disable <port> - disable <port> or all ports\n"
+    "switch enable <port> - enable <port> or all ports\n"
 );

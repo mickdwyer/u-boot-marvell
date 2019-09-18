@@ -355,5 +355,7 @@ enum sw_opts {
 	SW_PHY_READ,
 	SW_PHY_WRITE,
 	SW_LINK,
+	SW_ENABLE,
+	SW_DISABLE,
 	SW_NA
 };
